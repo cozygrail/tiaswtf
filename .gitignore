@@ -1,0 +1,27 @@
+# Node
+node_modules/
+.npm-cache/
+
+# Next.js
+.next/
+out/
+
+# Logs
+logs/
+*.log
+
+# Env
+.env
+.env.*
+server/.env
+web/.env
+
+# OS
+.DS_Store
+
+# Puppeteer cache
+server/.cache/
+
+# Editor
+.vscode/
+.idea/
