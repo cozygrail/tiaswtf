@@ -65,12 +65,24 @@ export default function Overlay(){
     let attempts = 0
     const connect = () => {
       const loc = typeof window !== 'undefined' ? window.location : { protocol:'http:', hostname:'localhost' }
-      const host = loc.hostname || 'localhost'
       const port = process.env.NEXT_PUBLIC_SERVER_PORT || 4000
-      const scheme = loc.protocol === 'https:' ? 'wss' : 'ws'
+      let wsUrl = null
+      try{
+        const base = process.env.NEXT_PUBLIC_SERVER_URL
+        if(base){
+          const u = new URL(base)
+          const proto = u.protocol === 'https:' ? 'wss:' : (u.protocol === 'http:' ? 'ws:' : u.protocol)
+          wsUrl = `${proto}//${u.host}/overlay`
+        }
+      }catch(_){ wsUrl = null }
+      if(!wsUrl){
+        const host = loc.hostname || 'localhost'
+        const scheme = loc.protocol === 'https:' ? 'wss' : 'ws'
+        wsUrl = `${scheme}://${host}:${port}/overlay`
+      }
       let ws
       try {
-        ws = new WebSocket(`${scheme}://${host}:${port}/overlay`)
+        ws = new WebSocket(wsUrl)
       } catch(e) {
         try { ws = new WebSocket(`${scheme}://localhost:${port}/overlay`) } catch(_) {}
       }
