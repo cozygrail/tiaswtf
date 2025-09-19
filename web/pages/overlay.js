@@ -84,7 +84,8 @@ export default function Overlay(){
       try {
         ws = new WebSocket(wsUrl)
       } catch(e) {
-        try { ws = new WebSocket(`${scheme}://localhost:${port}/overlay`) } catch(_) {}
+        // Fallback: compute scheme inline to avoid referencing an out-of-scope variable
+        try { ws = new WebSocket(`${loc.protocol==='https:'?'wss':'ws'}://localhost:${port}/overlay`) } catch(_) {}
       }
       wsRef.current = ws
       ws.onmessage = (ev) => {
