@@ -1,27 +1,23 @@
-# Node
-node_modules/
-.npm-cache/
-
-# Next.js
-.next/
-out/
-
-# Logs
-logs/
-*.log
-
-# Env
+# dependencies
+node_modules
+**/node_modules
 .env
-.env.*
 server/.env
-web/.env
-
-# OS
+web/.next
+web/out
 .DS_Store
+.pnpm-store
+.npm
 
-# Puppeteer cache
-server/.cache/
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# Editor
-.vscode/
-.idea/
+# pm2
+.pids
+logs
+
+# misc
+coverage
+

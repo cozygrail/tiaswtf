@@ -23,9 +23,12 @@ export default function Overlay(){
   const mediaDisplayTimerRef = useRef(null)
   const typingTimersRef = useRef({ step: null, failsafe: null })
   const pendingTypeTextRef = useRef('')
+  const pendingMediaRef = useRef(null)
   const mediaWaitTimerRef = useRef(null)
   const videoRef = useRef(null)
   const [awaitingMediaEnd, setAwaitingMediaEnd] = useState(false)
+  const [showSkin, setShowSkin] = useState(false)
+  const [nowText, setNowText] = useState('')
 
   // Aggressive overlay removal for this page
   useEffect(() => {
@@ -44,6 +47,17 @@ export default function Overlay(){
     const interval = setInterval(removeOverlays, 100)
     return () => clearInterval(interval)
   }, [])
+
+  // Absolute guard: never show media while typing. If it slips in, queue & clear.
+  useEffect(()=>{
+    try{
+      if(typing && mediaUrl){
+        pendingMediaRef.current = { url: mediaUrl, type: mediaType || null, fullscreen: !!fullscreen }
+        setMediaUrl(null); setMediaType(null); setFullscreen(false)
+      }
+    }catch(e){}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [typing, mediaUrl])
 
   // WebSocket with simple reconnect
   useEffect(()=>{
@@ -66,38 +80,62 @@ export default function Overlay(){
           const msg = JSON.parse(ev.data)
           if(msg.type === 'overlay_update'){
             lastRxRef.current = Date.now()
-            if(msg.caption !== undefined) setCaption(msg.caption)
-            if(msg.mediaUrl !== undefined) setMediaUrl(msg.mediaUrl || null)
-            if(msg.mediaType !== undefined) setMediaType(msg.mediaType || null)
-            if(msg.fullscreen !== undefined) setFullscreen(!!msg.fullscreen)
+            if(msg.caption !== undefined){
+              const c = String(msg.caption||'')
+              if(/\bmode\b/i.test(c)) setCaption('')
+              else setCaption(c)
+            }
+            // Never change media during typing; ignore incoming media until done
+            if(msg.mediaUrl !== undefined){
+              if(!typing && !pendingTypeTextRef.current){
+                setMediaUrl(msg.mediaUrl || null)
+              } else {
+                pendingMediaRef.current = { url: msg.mediaUrl || null, type: msg.mediaType || null, fullscreen: !!msg.fullscreen }
+              }
+            }
+            if(msg.mediaType !== undefined){ if(!typing && !pendingTypeTextRef.current){ setMediaType(msg.mediaType || null) } }
+            if(msg.fullscreen !== undefined){ if(!typing && !pendingTypeTextRef.current){ setFullscreen(!!msg.fullscreen) } }
             if(msg.face !== undefined) setFace(msg.face)
             if(msg.sfx){ try{ audioRef.current.src = msg.sfx; audioRef.current.play(); }catch(e){} }
             if(msg.say){ speak(msg.say) }
             if(msg.typeText){
-              if((msg.mediaUrl || mediaUrl) && (msg.fullscreen || fullscreen)){
-                // Defer typing until media finishes
-                pendingTypeTextRef.current = msg.typeText
-                setAwaitingMediaEnd(true)
-                if((msg.mediaType || mediaType) !== 'video'){
-                  try{ clearTimeout(mediaWaitTimerRef.current) }catch(e){}
-                  mediaWaitTimerRef.current = setTimeout(()=>{
-                    if(pendingTypeTextRef.current){
-                      const t = pendingTypeTextRef.current
-                      pendingTypeTextRef.current = ''
-                      setAwaitingMediaEnd(false)
-                      startTyping(t)
-                    }
-                  }, 2500)
-                }
-              } else {
+              // Strict rule: never show media during typing; queue text if media present
+              if((msg.mediaUrl || mediaUrl)){
+                // Defer incoming media; show after typing completes
+                pendingMediaRef.current = { url: msg.mediaUrl || null, type: msg.mediaType || null, fullscreen: !!msg.fullscreen }
+                setMediaUrl(null); setMediaType(null); setFullscreen(false)
                 startTyping(msg.typeText)
+              } else if(!typing) {
+                startTyping(msg.typeText)
+              } else {
+                // If currently typing, append to queue instead of interrupting
+                pendingTypeTextRef.current = (pendingTypeTextRef.current||'') + '\n' + msg.typeText
               }
             }
             try{ clearTimeout(revertTimerRef.current) }catch(e){}
-            // Shorter auto-revert; if media is present in this update, keep even shorter
+            // Revert only after typing completes; base on length when text to ensure full read time
             const hasMedia = !!(msg.mediaUrl)
-            const ms = (hasMedia ? 3500 : 4200) + (msg.typeText ? 800 : 0)
+            const expectedMs = msg.typeText ? Math.max(4200, String(msg.typeText).length * 55 + 3000) : 0
+            const ms = msg.typeText ? expectedMs : (hasMedia ? 3500 : 5200)
             revertTimerRef.current = setTimeout(()=>{
+              // If there's pending text, start it immediately
+              if(pendingTypeTextRef.current){
+                const t = pendingTypeTextRef.current
+                pendingTypeTextRef.current = ''
+                startTyping(t)
+                return
+              }
+              // Otherwise, if there's pending media, show it now
+              if(pendingMediaRef.current && !typing){
+                const m = pendingMediaRef.current
+                pendingMediaRef.current = null
+                setMediaUrl(m.url)
+                setMediaType(m.type || null)
+                setFullscreen(!!m.fullscreen)
+                // schedule cleanup after a bit
+                setTimeout(()=>{ setCaption(''); setGlitch('') }, 200)
+                return
+              }
               setGlitch('glitch-shake')
               setTimeout(()=>{ setMediaUrl(null); setMediaType(null); setFullscreen(false); setCaption(''); setGlitch('') }, 700)
             }, ms)
@@ -145,9 +183,31 @@ export default function Overlay(){
         setTimeout(()=> setGlitch(''), 500)
         setBlinkOn(false)
         setFace('._.')
+        // Occasionally show the authentic Sidekick dashboard skin as idle backdrop
+        if(Math.random()<0.35){
+          setShowSkin(true)
+          // Auto-hide skin after 7s or on next activity
+          setTimeout(()=>{ setShowSkin(false) }, 7000)
+        }
       }
     }, 8000)
     return ()=>{ active=false; clearInterval(fid); clearInterval(gl); clearInterval(hb); try{ document.removeEventListener('visibilitychange', onVis) }catch(e){} }
+  }, [])
+
+  // Clock in header (Sidekick style)
+  useEffect(()=>{
+    const fmt = ()=>{
+      try{
+        const d = new Date()
+        const month = new Intl.DateTimeFormat('en-US', { month:'short', timeZone:'America/Los_Angeles' }).format(d)
+        const day = new Intl.DateTimeFormat('en-US', { day:'numeric', timeZone:'America/Los_Angeles' }).format(d)
+        const time = new Intl.DateTimeFormat('en-US', { hour:'numeric', minute:'2-digit', hour12:true, timeZone:'America/Los_Angeles' }).format(d).toLowerCase()
+        setNowText(`${month} ${day}, ${time}`)
+      }catch(_){ setNowText('') }
+    }
+    fmt()
+    const t = setInterval(fmt, 30000)
+    return ()=> clearInterval(t)
   }, [])
 
   function speak(text){
@@ -209,61 +269,51 @@ export default function Overlay(){
     // Aggressively strip trailing 'undefined' artifacts (any case, repeated, with punctuation/whitespace)
     clean = stripUndef(clean)
     clean = clean.trimEnd()
-    const chars = Array.from(clean)
+    const total = clean
     // Clear any in-flight timers to avoid overlaps
     try{ clearTimeout(typingTimersRef.current.step) }catch(e){}
     try{ clearTimeout(typingTimersRef.current.failsafe) }catch(e){}
+    // Ensure no media is visible while typing begins
+    try{ setMediaUrl(null); setMediaType(null); setFullscreen(false) }catch(e){}
     setTyping(true)
     setTyped('')
-    // Seed with first 3 characters to dodge initial-drop/kerning issues
-    const seed = stripUndef(chars.slice(0, 3).join(''))
-    let i = seed.length
+    try{ typedRef.current = '' }catch(e){}
+    let i = 0
     const runStep = ()=>{
-      if(i < chars.length){
-        setTyped(prev=> stripUndef(prev + chars[i]))
+      if(i < total.length){
+        const next = stripUndef(total.slice(0, i+1))
+        setTyped(next)
+        try{ typedRef.current = next }catch(e){}
         i++
         typingTimersRef.current.step = setTimeout(runStep, 26 + Math.random()*36)
       } else {
         typingTimersRef.current.step = setTimeout(()=>{ 
           setTyping(false); 
           setTyped('');
-          // 75% chance to fetch related animation after typing finishes
+          // After typing finishes, show any pending media quickly
           try{
-            // Skip during idle messages; reduce frequency to ~30%
-            const lastMsg = wsRef.current?.lastMsg || {}
-            if(!lastMsg.idle && Math.random() < 0.30){
-              const q = (String(text||'').slice(0, 64) || 'meme')
-              const base = typeof window !== 'undefined' ? window.location : { protocol:'http:', hostname:'localhost' }
-              const host = base.hostname || 'localhost'
-              const port = process.env.NEXT_PUBLIC_SERVER_PORT || 4000
-              const api = `${base.protocol}//${host}:${port}/api/media/search?q=${encodeURIComponent(q)}`
-              fetch(api).then(r=>r.json()).then(j=>{
-                if(j && j.ok && j.url){
-                  setMediaUrl(j.url)
-                  setMediaType(j.type||'video')
-                  setFullscreen(true)
-                  // Auto-clear fetched media quickly
-                  try{ clearTimeout(mediaDisplayTimerRef.current) }catch(e){}
-                  mediaDisplayTimerRef.current = setTimeout(()=>{ 
-                    try{ setMediaUrl(null); setMediaType(null); setFullscreen(false) }catch(e){}
-                  }, 4000)
-                }
-              }).catch(()=>{})
+            if(pendingMediaRef.current){
+              const m = pendingMediaRef.current
+              pendingMediaRef.current = null
+              setMediaUrl(m.url)
+              setMediaType(m.type || null)
+              setFullscreen(!!m.fullscreen)
             }
           }catch(e){}
-        }, 2000)
+        }, 1200)
       }
     }
-    // Apply seed on next frame for reliable initial paint
-    try{ requestAnimationFrame(()=>{
-      setTyped(stripUndef(seed))
-      typingTimersRef.current.step = setTimeout(runStep, 70)
-    }) } catch(_) {
-      setTyped(stripUndef(seed))
-      typingTimersRef.current.step = setTimeout(runStep, 70)
+    try{ requestAnimationFrame(()=>{ typingTimersRef.current.step = setTimeout(runStep, 60) }) } catch(_) {
+      typingTimersRef.current.step = setTimeout(runStep, 60)
     }
-    // Failsafe: if first glyphs didn't render, force-seed shortly after
-    typingTimersRef.current.failsafe = setTimeout(()=>{ try{ if(typedRef.current.length < seed.length && seed.length){ setTyped(stripUndef(seed)) } }catch(e){} }, 160)
+    // Enforcer: ensure rendered prefix matches current index while typing
+    typingTimersRef.current.failsafe = setInterval(()=>{
+      try{
+        if(!typing) { clearInterval(typingTimersRef.current.failsafe); return }
+        const expect = stripUndef(total.slice(0, i))
+        if(typedRef.current !== expect){ setTyped(expect); typedRef.current = expect }
+      }catch(e){}
+    }, 50)
   }
 
   // Auto-scroll typing container to keep newest text visible
@@ -302,7 +352,7 @@ export default function Overlay(){
         [data-nextjs-hmr-indicator], [data-nextjs-dev-overlay], .nextjs-dev-overlay,
         [id*="nextjs"], [class*="nextjs"], [data-overlay], [data-error-overlay] { display:none !important; }
         @keyframes cursor-blink { 50% { opacity: 0; } }
-        .terminal .cursor { display:inline-block; width:0.6em; background:#00ff99; animation: cursor-blink 1s steps(1, start) infinite; }
+        .terminal .cursor { display:inline-block; width:0.45em; background:#123a6b; animation: cursor-blink 1s steps(1, start) infinite; }
         @keyframes shake { 10%, 90% { transform: translate3d(-2px, 0, 0); } 20%, 80% { transform: translate3d(4px, 0, 0); } 30%, 50%, 70% { transform: translate3d(-6px, 0, 0); } 40%, 60% { transform: translate3d(6px, 0, 0); } }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         @keyframes bounce { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-18px); } }
@@ -314,24 +364,44 @@ export default function Overlay(){
       `}</style>
       <div style={{position:'absolute', inset:0, display:'grid', placeItems:'center'}}>
         <div style={{position:'absolute', inset:0}}>
-          <div className={`anim-stage ${glitch}`} style={{position:'absolute', inset:0, background:'#0a1a1a', border:'2px solid #0f2b2b', borderRadius:10, boxShadow:'inset 0 0 32px rgba(0,0,0,0.6), inset 0 0 4px rgba(8,255,200,0.15)'}}>
+          <div className={`anim-stage ${glitch}`} style={{position:'absolute', inset:0, background:'linear-gradient(180deg,#eef3fb 0%,#e6edf9 100%)', border:'2px solid #9db3d1', borderRadius:10, boxShadow:'inset 0 0 18px rgba(10,30,60,0.15), 0 2px 6px rgba(0,0,0,0.25)', zIndex:1}}>
+            {/* Top-right: date (small, bold) and status icons stacked below */}
+            <div style={{position:'absolute', right:8, top:6, textAlign:'right', transform:'scale(0.8)', transformOrigin:'top right'}}>
+              <div style={{fontFamily:'Verdana, Tahoma, Arial, sans-serif', fontWeight:700, fontSize:9, color:'#123a6b', lineHeight:1.1}}>{nowText}</div>
+              <div style={{marginTop:2, display:'flex', alignItems:'center', justifyContent:'flex-end', gap:8}}>
+                {/* Reception bars (30% smaller than before) */}
+                <div aria-label="reception" style={{display:'grid', gridAutoFlow:'column', alignItems:'end', gap:2}}>
+                  {Array.from({length:4}).map((_,i)=> (
+                    <span key={i} style={{display:'inline-block', width:1.76, height:Math.round((4+i*3)*0.7*0.88), background:'#123a6b', opacity:0.9}} />
+                  ))}
+                </div>
+                {/* Battery */}
+                <div aria-label="battery" style={{display:'inline-flex', alignItems:'center', padding:'1px 1px 1px 3px', border:'1px solid #123a6b', borderRadius:2}}>
+                  <div style={{width:10.5, height:6, background:'#123a6b'}} />
+                  <div style={{width:1.5, height:3.7, background:'#123a6b', marginLeft:2}} />
+                </div>
+              </div>
+            </div>
+                {showSkin && !typing && !mediaUrl && (
+                  <img src={`http://${typeof window!=='undefined'?window.location.hostname:'localhost'}:${process.env.NEXT_PUBLIC_SERVER_PORT||4000}/skin/sidekick`} alt="sidekick skin" style={{position:'absolute', left:0, top:0, width:'100%', height:'100%', objectFit:'cover', borderRadius:10, opacity:0.95, filter:'saturate(1.05) contrast(1.02)'}} />
+                )}
             {!typing && (
-              <div style={{position:'absolute', inset:0, display:'grid', placeItems:'center', color:'#08ffc8', fontFamily:'monospace', fontSize:'min(8vw, 96px)', textShadow:'0 0 8px rgba(8,255,200,0.6)', transform:`translate(${jitter.x}px, ${jitter.y}px)`}}>
+              <div style={{position:'absolute', inset:0, display:'grid', placeItems:'center', color:'#123a6b', fontFamily:'Tahoma, Verdana, Arial, sans-serif', fontSize:'min(7.5vw, 65px)', textShadow:'0 1px 0 rgba(255,255,255,0.8)', transform:`translate(${jitter.x}px, ${jitter.y}px)`}}>
                 <FaceMarkup />
               </div>
             )}
             {typing && (
-              <div ref={textBoxRef} style={{position:'absolute', inset:'6% 4% 6% 4%', color:'#00ff99', fontFamily:'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace', fontSize:'min(6.75vw, 86px)', lineHeight:1.1, textShadow:'0 0 8px rgba(0,255,153,0.5)', overflowY:'auto', fontFeatureSettings:'"liga" 0, "calt" 0', hyphens:'none', WebkitHyphens:'none'}} className="terminal">
-                <pre style={{whiteSpace:'pre-wrap', margin:0, overflowWrap:'anywhere', wordBreak:'break-word', fontKerning:'none'}}>{typed}<span className="cursor"> </span></pre>
+              <div ref={textBoxRef} style={{position:'absolute', inset:'28px 16px 16px 16px', color:'#0c2d6b', fontFamily:'Verdana, Tahoma, Arial, sans-serif', fontWeight:700, fontSize:'min(4.5vw, 38px)', lineHeight:1.22, textShadow:'0 1px 0 rgba(255,255,255,0.85)', overflowY:'auto', background:'transparent', border:'none', borderRadius:0, padding:0}} className="terminal">
+                <pre style={{whiteSpace:'pre-wrap', margin:0, overflowWrap:'anywhere', wordBreak:'break-word', fontKerning:'none', fontFamily:'Verdana, Tahoma, Arial, sans-serif', fontWeight:700}}>{typed}<span className="cursor"> </span></pre>
               </div>
             )}
           </div>
 
           {mediaUrl && mediaType !== 'video' && (
-            <img src={mediaUrl} alt="" onError={()=>{ try{ setMediaUrl(null) }catch(e){} }} style={{position:'absolute', left: 0, top: 0, width:'100%', height:'100%', objectFit:'cover', borderRadius: 10, border:'none', background:'transparent'}}/>
+            <img src={mediaUrl} alt="" onError={()=>{ try{ setMediaUrl(null) }catch(e){} }} style={{position:'absolute', left: 0, top: 0, width:'100%', height:'100%', objectFit:'cover', borderRadius: fullscreen ? 0 : 10, border:'none', background:'transparent', zIndex:9}}/>
           )}
           {mediaUrl && mediaType === 'video' && (
-            <video ref={videoRef} src={mediaUrl} autoPlay muted loop={!awaitingMediaEnd} playsInline onError={()=>{ try{ setMediaUrl(null); setMediaType(null) }catch(e){} }} style={{position:'absolute', left: 0, top: 0, width:'100%', height:'100%', objectFit:'cover', borderRadius: 10}} />
+            <video ref={videoRef} src={mediaUrl} autoPlay muted loop={!awaitingMediaEnd} playsInline onError={()=>{ try{ setMediaUrl(null); setMediaType(null) }catch(e){} }} style={{position:'absolute', left: 0, top: 0, width:'100%', height:'100%', objectFit:'cover', borderRadius: fullscreen ? 0 : 10, zIndex:9}} />
           )}
 
           {caption && (

@@ -12,12 +12,23 @@ import { FFmpegStreamer } from './streamer/ffmpegReal.js'
 import { OBSStreamer } from './streamer/obs.js'
 import pack from './bot/sidekickPack.json' with { type: 'json' }
 import { PumpfunChat } from './integrations/pumpfunChat.js'
+import path from 'path'
+import { fileURLToPath } from 'url'
 
 const app = express()
 app.use(cors())
 app.use(express.json())
 
 const PORT = process.env.PORT || 4000
+// Static helper to serve the original Sidekick dashboard screenshot to the overlay
+try{
+  const __dirname = path.dirname(fileURLToPath(import.meta.url))
+  const sidekickPng = path.resolve(__dirname, '..', '..', '2b1c8367-38b3-48bb-aa6e-36c7f50b0a0f_xlarge.png')
+  app.get('/skin/sidekick', (req, res)=>{
+    try{ res.sendFile(sidekickPng) }catch(e){ res.status(404).end() }
+  })
+}catch(_){ }
+
 
 // REST endpoints for manual start/stop (MVP)
 const mode = process.env.STREAM_MODE || 'obs'  // 'obs' | 'ffmpeg'
@@ -105,7 +116,7 @@ function parseRequestedColor(text){
 function broadcastOverlay(payload){
   const data = JSON.stringify({
     type:'overlay_update',
-    caption: sanitize(payload.caption),
+    caption: (()=>{ const c = sanitize(payload.caption); return /\bMODE\b|EDGE MODE/i.test(c) ? '' : c })(),
     face: sanitize(payload.face),
     mediaUrl: payload.mediaUrl || null,
     mediaType: payload.mediaType || null,
@@ -127,7 +138,9 @@ wssOverlay.on('connection', (ws)=>{
 // Pump.fun chat relay (enable with env PUMPFUN_URL)
 let pump = null
 let lastPumpfunReply = 0
+let lastPumpfunMsgAt = 0
 let recentMessages = [] // Track message volume for smart rate limiting
+let sentimentWindow = [] // [{t, user, text}]
 function isPumpUiNoise(message){
   try{
     const m = String(message||'')
@@ -148,6 +161,7 @@ if(process.env.PUMPFUN_URL){
   pump = new PumpfunChat({ tokenUrl: process.env.PUMPFUN_URL, onMessage: async ({user, text}) => {
     try{
       console.log('[pumpfun] message:', user, ':', text)
+      lastPumpfunMsgAt = Date.now()
       // Drop any UI/system noise that slipped through or fake usernames
       if(user === 'chat' || isPumpUiNoise(text)){
         console.log('[pumpfun] filtered UI/system noise')
@@ -163,9 +177,11 @@ if(process.env.PUMPFUN_URL){
       try{ lexicon.addText(text) }catch(e){}
       recentMessages.push(now)
       recentMessages = recentMessages.filter(time => now - time < 60000) // Keep last 60 seconds
+      sentimentWindow.push({ t: now, user, text })
+      sentimentWindow = sentimentWindow.filter(e => now - e.t < 20000) // 20s window for crowd mood
       
       const messagesPerMinute = recentMessages.length
-      let rateLimitMs = 8000 // Default 8 seconds
+      let rateLimitMs = 6000 // Default 6 seconds (more responsive)
       
       // If manual chat was active very recently, pause Pump.fun replies briefly
       if(now - manualFocusAt < 6000){
@@ -174,14 +190,14 @@ if(process.env.PUMPFUN_URL){
       }
 
       // Adjust rate limiting based on chat volume
-      if(messagesPerMinute > 20) {
-        rateLimitMs = 15000 // 15 seconds for high volume
-      } else if(messagesPerMinute > 10) {
-        rateLimitMs = 12000 // 12 seconds for medium volume
+      if(messagesPerMinute > 30) {
+        rateLimitMs = 10000 // 10s at very high volume
+      } else if(messagesPerMinute > 15) {
+        rateLimitMs = 8000 // 8s at medium volume
       }
       
       // Smart message skipping - skip some messages during high volume
-      if(messagesPerMinute > 15 && Math.random() < 0.6) {
+      if(messagesPerMinute > 35 && Math.random() < 0.35) {
         console.log('[pumpfun] high volume, randomly skipping message')
         return
       }
@@ -204,8 +220,20 @@ if(process.env.PUMPFUN_URL){
         return
       }
       
-      // Generate bot reply with volume awareness + lexicon context
+      // Generate bot reply with volume awareness + lexicon context + crowd mood
       let reply
+      const crowdText = (()=>{
+        try{
+          const joined = sentimentWindow.map(e=> e.text).join(' | ').toLowerCase()
+          const angry = (joined.match(/fuck|angry|pissed|mad|wtf|retard|dump|scam|rug|jeet|hate|sucks|shit/g)||[]).length
+          const hype = (joined.match(/lfg|pump|moon|send|based|let'?s go|ape/g)||[]).length
+          const bearish = (joined.match(/dump|down|red|bear|sold|sell/g)||[]).length
+          if(angry >= 6) return 'crowd_mood: angry'
+          if(hype >= 6) return 'crowd_mood: hype'
+          if(bearish >= 6) return 'crowd_mood: bearish'
+        }catch(_){ }
+        return ''
+      })()
       if(messagesPerMinute > 20) {
         // High volume - use meta-commentary about the chaos
         const metaResponses = [
@@ -219,17 +247,19 @@ if(process.env.PUMPFUN_URL){
         reply = { text: metaResponses[Math.floor(Math.random() * metaResponses.length)] + ' — keep ' + tokenMeta.symbol + ' vibes clean' }
       } else if(messagesPerMinute > 10) {
         // Medium volume - shorter responses
-        reply = await generateReply(cleanText + " (keep it short)", { lexicon: lexicon.snapshot(), tokenMeta })
+        reply = await generateReply((crowdText? crowdText+"\n" : '') + cleanText + " (keep it short)", { lexicon: lexicon.snapshot(), tokenMeta })
       } else {
         // Normal volume - full responses
-        reply = await generateReply(cleanText, { lexicon: lexicon.snapshot(), tokenMeta })
+        reply = await generateReply((crowdText? crowdText+"\n" : '') + cleanText, { lexicon: lexicon.snapshot(), tokenMeta })
       }
       
       const safeText = sanitize(reply.text || '')
-      console.log('[pumpfun] bot reply:', safeText, `(${messagesPerMinute} msgs/min)`)
+      const mention = user ? ('@' + String(user).trim().split(/\s+/)[0]) : ''
+      const addressed = mention && !/^\s*@/i.test(safeText) ? `${mention} ${safeText}` : safeText
+      console.log('[pumpfun] bot reply:', addressed, `(${messagesPerMinute} msgs/min)`)
       
       // Send bot response to chat clients
-      wssChat.clients.forEach(c=> c.readyState===1 && c.send(JSON.stringify({ type:'bot_message', text: safeText })))
+      wssChat.clients.forEach(c=> c.readyState===1 && c.send(JSON.stringify({ type:'bot_message', text: addressed })))
       
       // Update overlay
       const overlayPayload = {
@@ -241,17 +271,36 @@ if(process.env.PUMPFUN_URL){
         fullscreen: false,
         sfx: reply.sfx || null,
         say: reply.say || null,
-        typeText: safeText,
+        typeText: addressed,
         color: parseRequestedColor(cleanText) || undefined
       }
       console.log('[pumpfun] overlay tx:', JSON.stringify(overlayPayload))
       broadcastOverlay(overlayPayload)
       
-      // If reply had media, send it after a short delay
+      // If reply had media, send it after estimated typing duration so it never interrupts typing
       if(reply.mediaUrl){
+        // Always attempt to show media; slightly sooner delay to help GIFs feel snappy
+        const estMs = Math.max(1000, Math.min(14000, 45 * addressed.length + 900))
         setTimeout(()=>{
           try{ broadcastOverlay({ caption:'', face: reply.face || '(•‿•)', mediaUrl: reply.mediaUrl, mediaType: reply.mediaType||null, fullscreen: !!reply.fullscreen, sfx:null, say:null, typeText:null }) }catch(e){}
-        }, 1200)
+        }, estMs)
+      }
+      // Fallback: if no media selected but keywords strongly suggest media, inject a pack GIF
+      else {
+        try{
+          const t = addressed.toLowerCase()
+          let url = null, type = null
+          if(/volcano|explode|eruption|lava/.test(t)){ url = pack.memes.volcano; type = 'gif' }
+          else if(/bomb|explode|detonate/.test(t)){ url = pack.memes.bomb; type = 'gif' }
+          else if(/matrix|terminal|hacker/.test(t)){ url = pack.memes.matrix; type = 'gif' }
+          else if(/rocket|moon/.test(t)){ url = pack.memes.rocket; type = 'gif' }
+          if(url){
+            const estMs2 = Math.max(900, Math.min(12000, 42 * addressed.length + 800))
+            setTimeout(()=>{
+              try{ broadcastOverlay({ caption:'', face: reply.face || '(•‿•)', mediaUrl: url, mediaType: type, fullscreen: true, sfx:null, say:null, typeText:null }) }catch(e){}
+            }, estMs2)
+          }
+        }catch(_){ }
       }
       
       lastPumpfunReply = now
@@ -259,6 +308,18 @@ if(process.env.PUMPFUN_URL){
     }catch(e){ console.error('[pumpfun] error processing message:', e) }
   }})
   pump.connect().catch(console.error)
+  // Watchdog: if no Pump.fun messages for 45s, reconnect
+  setInterval(async ()=>{
+    try{
+      const idle = Date.now() - lastPumpfunMsgAt
+      if(idle > 45000){
+        console.log('[pumpfun] watchdog: reconnecting (idle', idle,'ms)')
+        try{ await pump.close() }catch(e){}
+        try{ await pump.connect() }catch(e){}
+        lastPumpfunMsgAt = Date.now()
+      }
+    }catch(e){}
+  }, 10000)
 }
 
 wssChat.on('connection', (ws)=>{
@@ -288,10 +349,17 @@ wssChat.on('connection', (ws)=>{
         console.log('[chat] reply:', safeText)
         // Broadcast to all chat clients
         wssChat.clients.forEach(c=> c.readyState===1 && c.send(JSON.stringify({ type:'bot_message', text: safeText })))
-        // send overlay updates (force text-only; no media mid-typing)
+        // send overlay updates (text first; media deferred until after typing)
         const payload = { caption: '', face: reply.face || '(•‿•)', mediaUrl: null, mediaType: null, fullscreen: false, sfx: null, say: null, typeText: safeText }
         console.log('[overlay] tx:', JSON.stringify(payload))
         broadcastOverlay(payload)
+        // If reply includes media, schedule it to render after typing completes
+        if(reply.mediaUrl){
+          const estMs = Math.max(1000, Math.min(14000, 45 * safeText.length + 900))
+          setTimeout(()=>{
+            try{ broadcastOverlay({ caption:'', face: reply.face || '(•‿•)', mediaUrl: reply.mediaUrl, mediaType: reply.mediaType||null, fullscreen: !!reply.fullscreen, sfx:null, say:null, typeText:null }) }catch(e){}
+          }, estMs)
+        }
         lastManualReply = Date.now()
       }
     }catch(e){}
@@ -302,9 +370,10 @@ wssChat.on('connection', (ws)=>{
 let lastActivityAt = Date.now()
 setInterval(async ()=>{
   try{
-    // If there is a hot trend, address it with priority
+    // If there is a hot trend AND pump fun is quiet, address it with priority
     const hot = autonomy.trends.pullHot(6)
-    if(hot){
+    const pumpQuietMs = Date.now() - lastPumpfunMsgAt
+    if(hot && pumpQuietMs > 15000){
       const topic = hot.key
       const prompt = `Chat is spamming about: "${topic}". Respond to the crowd directly, concise and assertive.`
       const reply = await generateReply(prompt)
@@ -315,7 +384,9 @@ setInterval(async ()=>{
     }
     const idleMs = Date.now() - lastActivityAt
     // Very aggressive idle threshold for constant snarky engagement
-    if(idleMs < 10000) return
+    // Extend idle threshold when pump fun is active
+    const minIdle = (Date.now() - lastPumpfunMsgAt < 15000) ? 25000 : 10000
+    if(idleMs < minIdle) return
     lastActivityAt = Date.now()
     const prompts = pack.idlePrompts || ['Thinking…']
     const prompt = prompts[Math.floor(Math.random()*prompts.length)] || 'Thinking…'

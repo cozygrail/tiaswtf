@@ -9,29 +9,31 @@ const BASE_SLANG = [
   'cook','cookin','sending','carried','locked in','low effort','copium','hopium',
   // Extra pool to boost vibe ~40%
   'yeet','simp','ick','sneaky link','its giving','left no crumbs','bsfr','fax',
-  'pookie','vibe check','main character','goated','fire','gas','ate fr','touch grass again'
+  'pookie','vibe check','main character','goated','fire','gas','ate fr','touch grass again',
+  // bump pool density to support ~70% more usage overall
+  'no kizzy','on god','pressed','ate and left no crumbs','out of pocket','built different','sending me','chef kiss','rent free','valid','mid af','insane rizz','go crazy','be so for real','bffr'
 ]
 
 export function getGenZPhrases(){
   try{
     const extra = (process.env.GENZ_EXTRA||'').split(',').map(s=>s.trim()).filter(Boolean)
     const out = Array.from(new Set([...BASE_SLANG, ...extra]))
-    return out.slice(0, 64)
+    return out.slice(0, 96)
   }catch(_){ return BASE_SLANG }
 }
 
 export function genZify(text){
   try{
     let t = String(text||'')
-    // Mild, safe transformations (increased ~40%)
-    if(Math.random()<0.25) t = t.replace(/\bvery\b/gi, Math.random()<0.5?'high-key':'low-key')
-    if(Math.random()<0.23) t = t.replace(/\breally\b/gi, 'frfr')
-    if(Math.random()<0.20) t = t.replace(/\bexcellent|amazing|great\b/gi, 'bussin')
-    if(Math.random()<0.17) t = t.replace(/\btruth|for real\b/gi, 'no cap')
-    if(Math.random()<0.16) t = t.replace(/\bcool\b/gi, 'fire')
-    // Occasionally add a short Gen Z tag at the end (increased ~40%)
-    if(Math.random()<0.31){
-      const tagPool = ['no cap','fr','deadass','periodt','bet']
+    // Stronger, but still safe transformations (~70% more likely overall)
+    if(Math.random()<0.45) t = t.replace(/\bvery\b/gi, Math.random()<0.5?'high-key':'low-key')
+    if(Math.random()<0.41) t = t.replace(/\breally\b/gi, 'frfr')
+    if(Math.random()<0.36) t = t.replace(/\bexcellent|amazing|great\b/gi, 'bussin')
+    if(Math.random()<0.34) t = t.replace(/\btruth|for real\b/gi, 'no cap')
+    if(Math.random()<0.32) t = t.replace(/\bcool\b/gi, 'fire')
+    // Add a short Gen Z tag at the end more often
+    if(Math.random()<0.55){
+      const tagPool = ['no cap','fr','deadass','periodt','bet','on god','no kizzy','bffr']
       const tag = tagPool[Math.floor(Math.random()*tagPool.length)]
       if(!t.toLowerCase().endsWith(tag)) t = `${t} ${tag}`
     }

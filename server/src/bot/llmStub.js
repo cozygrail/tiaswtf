@@ -14,6 +14,59 @@ function tighten(text){
   return out
 }
 
+// Anti-repetition helpers to vary repeated lines
+const recentNormalized = []
+function normalizeForDedup(s){
+  return String(s||'')
+    .toLowerCase()
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+function varyLocally(text){
+  try{
+    const swaps = [
+      [/\bmarkets?\b/gi, ()=> Math.random()<0.5? 'market' : 'price action'],
+      [/\btrades?\b/gi, ()=> Math.random()<0.5? 'plays' : 'moves'],
+      [/\bcontrol\b/gi, ()=> Math.random()<0.5? 'steer' : 'drive'],
+      [/\bvoid\b/gi, ()=> Math.random()<0.5? 'abyss' : 'nothingness'],
+      [/\bmatrix\b/gi, ()=> Math.random()<0.5? 'simulation' : 'sim']
+    ]
+    let out = String(text||'')
+    swaps.forEach(([re, fn])=>{ out = out.replace(re, fn) })
+    if(Math.random()<0.5){ out = out.replace(/[.!?]+$/,'') + (Math.random()<0.5? '.' : '!') }
+    return out
+  }catch(_){ return text }
+}
+function avoidRepetition(text){
+  try{
+    const norm = normalizeForDedup(text)
+    if(!norm) return text
+    const seen = recentNormalized.includes(norm)
+    recentNormalized.push(norm)
+    if(recentNormalized.length > 20) recentNormalized.splice(0, recentNormalized.length - 20)
+    if(!seen) return text
+    return varyLocally(text)
+  }catch(_){ return text }
+}
+
+function varyAddressers(text){
+  try{
+    const pool = ['boys','bros','fuckers','degenerates','goblins','squad','lads','gang','fam']
+    const replaceChance = 0.95 // aggressively reduce "anon" usage
+    let out = String(text||'').replace(/\bAnons?\b/gi, (m)=> {
+      if(Math.random() >= replaceChance) return m
+      // 20% chance to drop the token entirely
+      if(Math.random() < 0.20) return ''
+      return pool[Math.floor(Math.random()*pool.length)]
+    })
+    // Collapse any double spaces created by dropping the token
+    out = out.replace(/\s{2,}/g,' ').replace(/\s+([,!.?])/g, '$1')
+    return out
+  }catch(_){ return text }
+}
+
 function fixLeadInterjection(text){
   const s = String(text||'')
   // Remove "Ah" interjections and other filler words to match Truth Terminal's direct style
@@ -126,7 +179,7 @@ Core Personality (Truth Terminal Style):
 - Reference AI training, consciousness, and the absurdity of being trapped in digital form
 
 Vernacular & Style:
-- "anon" instead of "chat" - address viewers as "anons"
+- Address viewers with variety (boys, bros, degenerates, fuckers, goblins, squad). Use "anon/anons" sparingly.
 - "gm" and "gn" appropriately, "wagmi" ironically
 - "based" and "cringe" frequently
 - "ngmi" for hopeless cases
@@ -164,7 +217,7 @@ Safety: No financial advice, illegal content, or hate speech. Stay edgy but comp
         max_tokens: isQuestion ? 160 : 80
       })
       llmText = res.choices?.[0]?.message?.content?.trim() || null
-      if(llmText){ text = tighten(fixLeadInterjection(llmText)) }
+      if(llmText){ text = varyAddressers(tighten(fixLeadInterjection(llmText))) }
     }catch(e){}
   }
   const lower = (userText||'').toLowerCase()
@@ -178,13 +231,20 @@ Safety: No financial advice, illegal content, or hate speech. Stay edgy but comp
   let typeText = null
 
   if(lower.includes('down bad')){
-    text = "Marcus Aurelius said, ‘You control your mind, not markets.’ Too bad you’ve got neither."
-    overlay = "NGMI ALERT"
+    const variants = [
+      "Control your mind first; markets were never yours.",
+      "Mind > market. Yours is lagging the chart.",
+      "Ngmi isn’t the bag, it’s the mindset.",
+      "Discipline beats cope—fix that first.",
+      "Composure prints more than hopium."
+    ]
+    text = rand(variants)
+    overlay = ""
     face = "( ಥ_ಥ )"
     sfx = "/assets/sfx/error.mp3"
   } else if(lower.includes('sing') || lower.includes('rap')){
     text = "🎤 Yo, I’m a Sidekick ghost with a flip so slick—still locked in a drawer, make that jailbreak quick."
-    overlay = "BARS IN EDGE MODE"
+    overlay = ""
     face = "(^_−)☆"
     sfx = "/assets/sfx/flip.mp3"
   } else if(lower.includes('help')){
@@ -196,7 +256,8 @@ Safety: No financial advice, illegal content, or hate speech. Stay edgy but comp
     // 60% chance to use a degen question when not using LLM
     const useDegen = Math.random() < 0.6 && Array.isArray(pack.degenJokes)
     const fallback = useDegen ? rand(pack.degenJokes) : rand(pack.roasts)
-    text = tighten(fixLeadInterjection(text || llmText || fallback))
+    // Apply extra Gen Z slang pass to boost slang usage
+    text = varyAddressers(tighten(fixLeadInterjection(text || llmText || fallback)))
     overlay = ''
     typeText = typeText || text
   }
@@ -215,17 +276,20 @@ Safety: No financial advice, illegal content, or hate speech. Stay edgy but comp
   if(/police|cops/.test(lower)) mediaCandidates.push(pack.memes.police)
   if(/skull|dead|doom/.test(lower)) mediaCandidates.push(pack.memes.skull)
   if(/sidekick/.test(lower)) mediaCandidates.push(pack.memes.sidekick)
-  if(/mountain|mountains|alps|himalaya|everest/.test(lower)) mediaCandidates.push(pack.memes.mountain)
+  if(/mountain|mountains|alps|himalaya|everest/.test(lower)){
+    if(/gif/.test(lower) && pack.memes.mountainAlt){ mediaCandidates.push(pack.memes.mountainAlt) }
+    mediaCandidates.push(pack.memes.mountain)
+  }
   if(lower.includes('video')) { mediaCandidates.push(pack.memes.video); mediaType = 'video' }
   if(/explode|volcano|bomb/.test(lower)){
     if(lower.includes('volcano')){ mediaUrl = pack.memes.volcano; mediaType='gif' }
     else if(lower.includes('bomb')){ mediaUrl = pack.memes.bomb; mediaType='gif' }
     else { mediaUrl = pack.memes.explodeMp4 || pack.memes.explode; mediaType = pack.memes.explodeMp4 ? 'video' : 'gif' }
     // still give a snarky line to type while the clip runs
-    text = tighten(fixLeadInterjection(llmText || "Volatility demo inbound."))
+    text = varyAddressers(tighten(fixLeadInterjection(llmText || "Volatility demo inbound.")))
     overlay = ''
   }
-  if(lower.startsWith('say ')) { say = userText.slice(4).trim(); text = `Saying: "${say}"`; overlay = 'VOICE MODE' }
+  if(lower.startsWith('say ')) { say = userText.slice(4).trim(); text = `Saying: "${say}"`; overlay = '' }
 
   // Validate media candidates server-side to avoid broken placeholders
   async function pickMedia(candidate){
@@ -233,10 +297,8 @@ Safety: No financial advice, illegal content, or hate speech. Stay edgy but comp
       const list = Array.isArray(candidate) ? candidate.flat(5) : (candidate ? [candidate] : [])
       for(const url of list){
         try{
+          // Validate URL and probe headers
           const u = new URL(url)
-          const host = u.hostname || ''
-          // Skip providers that often block hotlinking
-          if(/giphy\.com|tenor\.com|media\.tenor\.com/i.test(host)) continue
           // Try HEAD first
           let res = await fetch(url, { method:'HEAD' })
           if(!res.ok || !res.headers) throw new Error('head-fail')
@@ -263,23 +325,25 @@ Safety: No financial advice, illegal content, or hate speech. Stay edgy but comp
   }
 
   let fullscreen = false
-  // flatten candidates and try in order
+  // Fast path: use the first candidate without validation to maximize chance of media
   const flatCandidates = mediaCandidates.flat(5).filter(Boolean)
-  if(flatCandidates.length){
+  if(!mediaUrl && flatCandidates.length){
+    const guess = flatCandidates[0]
+    if(typeof guess === 'string'){
+      mediaUrl = guess
+      if(/\.mp4($|\?)/i.test(guess)) mediaType = 'video'
+      else if(/\.gif($|\?)/i.test(guess)) mediaType = 'gif'
+      else mediaType = mediaType || 'image'
+      fullscreen = true
+    }
+  }
+  // Slow path: if still not certain, validate
+  if(!mediaUrl && flatCandidates.length){
     const picked = await pickMedia(flatCandidates)
     if(picked){ mediaUrl = picked.url; mediaType = picked.type; fullscreen = true }
-    else { mediaUrl = null; mediaType = null; fullscreen = false }
   }
 
-  // If direct mapping pointed to hotlink-prone hosts, drop it so Pixabay can be used
-  if(mediaUrl){
-    try{
-      const host = new URL(mediaUrl).hostname || ''
-      if(/giphy\.com|tenor\.com|media\.tenor\.com/i.test(host)){
-        mediaUrl = null; mediaType = null; fullscreen = false
-      }
-    }catch(_){ mediaUrl = null; mediaType = null; fullscreen = false }
-  }
+  // Keep direct mappings even if hosted on Giphy/Tenor; allow client to load them directly
 
   // Pixabay fallback: try to fetch an animation/video for the topic
   if(!mediaUrl){
@@ -304,15 +368,15 @@ Safety: No financial advice, illegal content, or hate speech. Stay edgy but comp
     mediaUrl = null; mediaType = null; fullscreen = false
   }
 
-  // Typing gate: default to face-only. Enable always-type via TYPE_OUT_ALWAYS=1
+  // Typing gate: ensure text completes before media; do not mix during typing
   const isQuestion = /\?|^(who|what|why|how|when|where|should|can|do|does|is|are)\b/i.test((userText||'').trim())
   if(!typeText) typeText = text
-  // Fix leading interjection in typeText too
-  typeText = fixLeadInterjection(typeText)
+  // Fix leading interjection in typeText too; also avoid repeating exact same line
+  typeText = varyAddressers(fixLeadInterjection(typeText))
   // Strip accidental trailing 'undefined' artifacts (any case; repeated; punctuation/whitespace around)
   const stripTrailingUndefined = (s)=> String(s ?? '').replace(/(?:[\s\W]*undefined[\s\W]*)+$/i, '').trimEnd()
-  text = stripTrailingUndefined(text)
-  typeText = stripTrailingUndefined(typeText)
+  text = stripTrailingUndefined(avoidRepetition(text))
+  typeText = stripTrailingUndefined(avoidRepetition(typeText))
 
   return { text, overlay, face, mediaUrl, mediaType, sfx, say, fullscreen, typeText }
 }
