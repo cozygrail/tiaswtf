@@ -113,6 +113,75 @@ function parseRequestedColor(text){
   return null
 }
 
+// Smart overlay broadcast with media fallback logic
+async function broadcastOverlayWithFallback(payload) {
+  let { mediaUrl, mediaType, ...rest } = payload
+  
+  if (mediaUrl) {
+    // Test if the media URL is accessible
+    try {
+      const response = await fetch(mediaUrl, { method: 'HEAD', timeout: 3000 })
+      if (!response.ok) {
+        console.log('[overlay] Media failed, trying fallback:', mediaUrl)
+        mediaUrl = null
+        mediaType = null
+      }
+    } catch (error) {
+      console.log('[overlay] Media unavailable, trying fallback:', mediaUrl, error.message)
+      
+      // Fallback strategy: find alternative GIFs from pack
+      const fallbackUrls = []
+      
+      // If it was a specific type, try alternatives
+      if (mediaUrl.includes('volcano') || mediaUrl.includes('explode')) {
+        fallbackUrls.push(pack.memes.bomb, pack.memes.fire, pack.memes.storm, pack.memes.explode)
+      } else if (mediaUrl.includes('rocket') || mediaUrl.includes('moon')) {
+        fallbackUrls.push(pack.memes.mountain, pack.memes.mountainAlt, pack.memes.moon)  
+      } else if (mediaUrl.includes('matrix') || mediaUrl.includes('hacker')) {
+        fallbackUrls.push(pack.memes.terminal, pack.memes.sidekick, pack.memes.glitch)
+      } else if (mediaUrl.includes('crypto') || mediaUrl.includes('chart') || mediaUrl.includes('trade')) {
+        fallbackUrls.push(pack.memes.crypto, pack.memes.chart, pack.memes.rug)
+      } else {
+        // General fallbacks - mix of static and animated
+        fallbackUrls.push(
+          pack.memes.sidekick,
+          pack.memes.mountain,
+          pack.memes.moon,
+          pack.memes.glitch,
+          pack.memes.crypto,
+          pack.memes.rug
+        )
+      }
+      
+      // Try fallback URLs one by one
+      for (const fallbackUrl of fallbackUrls) {
+        if (!fallbackUrl) continue
+        try {
+          const fallbackResponse = await fetch(fallbackUrl, { method: 'HEAD', timeout: 2000 })
+          if (fallbackResponse.ok) {
+            console.log('[overlay] Using fallback media:', fallbackUrl)
+            mediaUrl = fallbackUrl
+            mediaType = fallbackUrl.includes('.mp4') ? 'video' : 'gif'
+            break
+          }
+        } catch (e) {
+          console.log('[overlay] Fallback also failed:', fallbackUrl)
+        }
+      }
+      
+      // If all fallbacks fail, just show no media
+      if (!mediaUrl) {
+        console.log('[overlay] All media fallbacks failed, showing text only')
+        mediaUrl = null
+        mediaType = null
+      }
+    }
+  }
+  
+  // Send the final payload
+  broadcastOverlay({ ...rest, mediaUrl, mediaType })
+}
+
 function broadcastOverlay(payload){
   const data = JSON.stringify({
     type:'overlay_update',
@@ -282,7 +351,18 @@ if(process.env.PUMPFUN_URL){
         // Always attempt to show media; slightly sooner delay to help GIFs feel snappy
         const estMs = Math.max(1000, Math.min(14000, 45 * addressed.length + 900))
         setTimeout(()=>{
-          try{ broadcastOverlay({ caption:'', face: reply.face || '(•‿•)', mediaUrl: reply.mediaUrl, mediaType: reply.mediaType||null, fullscreen: !!reply.fullscreen, sfx:null, say:null, typeText:null }) }catch(e){}
+          try{ 
+            broadcastOverlayWithFallback({ 
+              caption:'', 
+              face: reply.face || '(•‿•)', 
+              mediaUrl: reply.mediaUrl, 
+              mediaType: reply.mediaType||null, 
+              fullscreen: !!reply.fullscreen, 
+              sfx:null, 
+              say:null, 
+              typeText:null 
+            }) 
+          }catch(e){}
         }, estMs)
       }
       // Fallback: if no media selected but keywords strongly suggest media, inject a pack GIF
@@ -293,11 +373,24 @@ if(process.env.PUMPFUN_URL){
           if(/volcano|explode|eruption|lava/.test(t)){ url = pack.memes.volcano; type = 'gif' }
           else if(/bomb|explode|detonate/.test(t)){ url = pack.memes.bomb; type = 'gif' }
           else if(/matrix|terminal|hacker/.test(t)){ url = pack.memes.matrix; type = 'gif' }
-          else if(/rocket|moon/.test(t)){ url = pack.memes.rocket; type = 'gif' }
+          else if(/rocket|moon|space/.test(t)){ url = pack.memes.rocket; type = 'gif' }
+          else if(/crypto|bitcoin|trade|chart|pump|dump/.test(t)){ url = pack.memes.crypto; type = 'gif' }
+          else if(/glitch|error|bug|crash/.test(t)){ url = pack.memes.glitch; type = 'gif' }
           if(url){
             const estMs2 = Math.max(900, Math.min(12000, 42 * addressed.length + 800))
             setTimeout(()=>{
-              try{ broadcastOverlay({ caption:'', face: reply.face || '(•‿•)', mediaUrl: url, mediaType: type, fullscreen: true, sfx:null, say:null, typeText:null }) }catch(e){}
+              try{ 
+                broadcastOverlayWithFallback({ 
+                  caption:'', 
+                  face: reply.face || '(•‿•)', 
+                  mediaUrl: url, 
+                  mediaType: type, 
+                  fullscreen: true, 
+                  sfx:null, 
+                  say:null, 
+                  typeText:null 
+                }) 
+              }catch(e){}
             }, estMs2)
           }
         }catch(_){ }
@@ -357,7 +450,18 @@ wssChat.on('connection', (ws)=>{
         if(reply.mediaUrl){
           const estMs = Math.max(1000, Math.min(14000, 45 * safeText.length + 900))
           setTimeout(()=>{
-            try{ broadcastOverlay({ caption:'', face: reply.face || '(•‿•)', mediaUrl: reply.mediaUrl, mediaType: reply.mediaType||null, fullscreen: !!reply.fullscreen, sfx:null, say:null, typeText:null }) }catch(e){}
+            try{ 
+              broadcastOverlayWithFallback({ 
+                caption:'', 
+                face: reply.face || '(•‿•)', 
+                mediaUrl: reply.mediaUrl, 
+                mediaType: reply.mediaType||null, 
+                fullscreen: !!reply.fullscreen, 
+                sfx:null, 
+                say:null, 
+                typeText:null 
+              }) 
+            }catch(e){}
           }, estMs)
         }
         lastManualReply = Date.now()
