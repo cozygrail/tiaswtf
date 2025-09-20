@@ -350,7 +350,7 @@ wssChat.on('connection', (ws)=>{
         // Broadcast to all chat clients
         wssChat.clients.forEach(c=> c.readyState===1 && c.send(JSON.stringify({ type:'bot_message', text: safeText })))
         // send overlay updates (text first; media deferred until after typing)
-        const payload = { caption: '', face: reply.face || '(•‿•)', mediaUrl: null, mediaType: null, fullscreen: false, sfx: null, say: null, typeText: safeText }
+        const payload = { caption: '', face: reply.face || '(•‿•)', mediaUrl: null, mediaType: null, fullscreen: false, sfx: reply.sfx || null, say: reply.say || null, typeText: safeText }
         console.log('[overlay] tx:', JSON.stringify(payload))
         broadcastOverlay(payload)
         // If reply includes media, schedule it to render after typing completes
