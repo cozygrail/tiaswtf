@@ -140,8 +140,8 @@ Happy building! ✨
   ```
 - Replace the test inputs in `server/src/streamer/ffmpegReal.js` with your capture pipeline later.
 
-## Pump.fun Chat Integration (stub)
-- See `server/src/integrations/pumpfunChat.js`. You can connect to a WS endpoint (if available) by setting `PUMPFUN_WS_URL`, or automate the site with Puppeteer (`PUMPFUN_HEADLESS=1`) and wire DOM events to the bot loop.
+## Pump.fun Chat Integration
+- See `server/src/integrations/pumpfunChat.js`. Set `PUMPFUN_URL` to your token's pump.fun page (e.g. `https://pump.fun/coin/GuvxRPZgAwEWSKofsTWKNSJ4NwiUXuFZroztqn9opump`) to enable live chat ingestion.
 
 ## Sidekick Phrase Pack & SFX
 - Edit `server/src/bot/sidekickPack.json` to customize quips, roasts, faces, and meme mappings.
